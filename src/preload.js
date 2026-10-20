@@ -3,6 +3,7 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 const { contextBridge, ipcRenderer } = require("electron");
 
+
 const apiBridge = {
   saveBooking: (data) => ipcRenderer.invoke("save-booking", data),
   getBookings: () => ipcRenderer.invoke("get-bookings"),
@@ -15,6 +16,11 @@ const apiBridge = {
   getDoctors: () => ipcRenderer.invoke("get-doctors"),
   addDoctor: (docData) => ipcRenderer.invoke("add-doctor", docData),
   deleteDoctor: (doctorId) => ipcRenderer.invoke("delete-doctor", doctorId),
+  getLabConfig: () => ipcRenderer.invoke("get-lab-config"),
+  verifyLabId: (labId) => ipcRenderer.invoke("verify-and-save-lab-id", labId),
+  getPatientHistory: (data) => ipcRenderer.invoke("get-patient-history", data),
+  restoreFromCloud: () => ipcRenderer.invoke("restore-from-cloud"),
+  importOldData: (rows) => ipcRenderer.invoke("import-old-data", rows)
 };
 
 // Dono names se expose karein

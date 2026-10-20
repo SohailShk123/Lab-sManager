@@ -1,6 +1,6 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { TEST_CATALOG } from '../testCatalog';
+import  {TEST_CATALOG}  from '../../testCatalog.js';
 
 function checkAbnormal(valStr, rangeStr) {
   if (!valStr || !rangeStr) return { isAbnormal: false, flag: '' };

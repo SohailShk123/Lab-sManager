@@ -54,8 +54,18 @@ export default function PatientDetailsSection({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Mobile</label>
-          <input type="text" name="mobile" value={formData.mobile || ''} onChange={handleInputChange} onKeyDown={handleKeyDown} placeholder="10 Digits" className={inputClass} />
+          <label className={labelClass}>Mobile Number</label>
+          <input
+            type="text"
+            name="mobile"
+            value={formData.mobile || ''}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="e.g. 9876543210"
+            maxLength="10"
+            required
+            className={inputClass}
+          />
         </div>
       </div>
     </div>

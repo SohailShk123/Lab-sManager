@@ -7,6 +7,7 @@ import TestParametersTable from './components/ResultEntryComp/TestParametersTabl
 
 export default function ResultEntry({ patient, onBack }) {
   const reg = useResultEntry(patient);
+  console.log("PATIENT DATA:", patient);
 
   return (
     <>

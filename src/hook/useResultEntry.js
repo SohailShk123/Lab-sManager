@@ -2,15 +2,30 @@ import { useState, useEffect, useRef } from 'react';
 import { TEST_CATALOG } from '../testCatalog';
 
 export function useResultEntry(patient) {
-  const [selectedTests, setSelectedTests] = useState(() => {
-    if (patient.selectedTests && Array.isArray(patient.selectedTests)) {
-      return patient.selectedTests;
+ const [selectedTests, setSelectedTests] = useState(() => {
+    const rawTests = patient.tests || patient.selectedTests || patient.selected_tests;
+    
+    if (!rawTests || rawTests === 'null' || rawTests === '[]') return ['CBC'];
+
+    if (Array.isArray(rawTests)) return rawTests;
+
+    if (typeof rawTests === 'string') {
+      try {
+        let parsed = [];
+        if (rawTests.includes('[')) {
+          // Ajeeb brackets aur quotes ko saaf karke array banayega
+          parsed = rawTests.replace(/[[\]\\"]/g, ' ').replace(/\s+/g, ' ').trim().split(',').map(t => t.trim());
+        } else {
+          parsed = rawTests.split(',').map(t => t.trim());
+        }
+        // Khali space wale hata do
+        const finalArray = parsed.filter(t => t !== '');
+        return finalArray.length > 0 ? finalArray : ['CBC'];
+      } catch (e) {
+        return ['CBC'];
+      }
     }
-    if (typeof patient.selected_tests === 'string') {
-      try { return JSON.parse(patient.selected_tests); } 
-      catch (e) { return ['CBC']; }
-    }
-    return ['CBC']; 
+    return ['CBC'];
   });
 
   const [testState, setTestState] = useState(() => {
@@ -28,22 +43,41 @@ export function useResultEntry(patient) {
   });
 
   const [comments, setComments] = useState('');
-  const [showQR, setShowQR] = useState(true);
+  const [showQR, setShowQR] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingReport, setIsLoadingReport] = useState(false);
   const [allowAutoEdit, setAllowAutoEdit] = useState(false); 
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
+useEffect(() => {
     let isMounted = true;
     const loadSavedReport = async () => {
       if (patient?.id && window.electronAPI?.getReport) {
         try {
           setIsLoadingReport(true);
           const savedData = await window.electronAPI.getReport(patient.id);
+          
           if (savedData && isMounted) {
-            if (savedData.selectedTests?.length > 0) setSelectedTests(savedData.selectedTests);
+            // 1. Tests String/Array se clean List nikalna
+            if (savedData.selectedTests) {
+               let parsedTests = [];
+               try {
+                 const testsStr = String(savedData.selectedTests);
+                 if (testsStr.includes('[')) {
+                   parsedTests = JSON.parse(testsStr.replace(/[[\]\\"]/g, ' ').replace(/\s+/g, ' ').trim().split(',').map(t => t.trim()));
+                 } else {
+                   parsedTests = testsStr.split(',').map(t => t.trim());
+                 }
+               } catch (e) {
+                 parsedTests = String(savedData.selectedTests).split(',').map(t => t.trim());
+               }
+               
+               // Sirf valid test names set karo
+               parsedTests = parsedTests.filter(t => t);
+               if (parsedTests.length > 0) setSelectedTests(parsedTests);
+            }
+            
             if (savedData.results && Object.keys(savedData.results).length > 0) {
               setTestState((prev) => ({ ...prev, ...savedData.results }));
             }
@@ -124,13 +158,32 @@ export function useResultEntry(patient) {
     setTestState({ ...testState, [testId]: updatedList });
   };
 
+  // 👇 YEH RAHA SMART SAVE FUNCTION 👇
   const handleSaveOnly = async () => {
     try {
       setIsSaving(true);
-      const payload = { patientId: patient.id, selectedTests, results: testState, comments };
+      
+      const prescribedTests = selectedTests.map(t => String(t).trim().toUpperCase());
+      const filteredResults = {};
+      
+      Object.keys(testState).forEach(testName => {
+        const safeTestName = String(testName).trim().toUpperCase();
+        if (prescribedTests.some(pt => pt.includes(safeTestName) || safeTestName.includes(pt))) {
+          filteredResults[testName] = testState[testName];
+        }
+      });
+
+      // Backend ko Results aur Updated Tests ki Array JSON format me bhejo
+      const payload = { 
+        patientId: patient.id, 
+        selectedTests: JSON.stringify(prescribedTests), // <-- Naya Test backend ko Array format me bhejega
+        results: filteredResults, 
+        comments 
+      };
+
       if (window.electronAPI?.saveReport) {
         const res = await window.electronAPI.saveReport(payload);
-        if (res?.success) alert('Report database me successfully save ho gayi!');
+        if (res?.success) alert('Report database me successfully save ho gayi (Tests aur Results Dono)!');
         else alert('Error: ' + (res?.error || 'Failed to save'));
       } else {
         alert('Save successful (Browser Test Mode)');

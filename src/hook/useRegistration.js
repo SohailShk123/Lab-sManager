@@ -20,6 +20,7 @@ export function useRegistration() {
   const [doctorList, setDoctorList] = useState([]);
   const [isDoctorModalOpen, setIsDoctorModalOpen] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [mobile, setMobile] = useState('');
 
   const nameRef = useRef(null);
   const api = window.electronAPI || window.api;
@@ -105,8 +106,7 @@ export function useRegistration() {
     });
     if (nameRef.current) nameRef.current.focus();
   };
-
-  const saveBookingToDB = async () => {
+const saveBookingToDB = async () => {
     if (!formData.patientName.trim()) {
       alert("Please enter Patient Name!");
       return null;
@@ -116,10 +116,14 @@ export function useRegistration() {
       return null;
     }
     try {
+      // 👇 FIX YAHAN HAI: tests field strictly JSON.stringify() me bheji jayegi
+      const testNamesArray = selectedTests.map((t) => t.name.toUpperCase());
+      
       const payload = {
         ...formData,
-        selectedTests: selectedTests.map((t) => t.name.toUpperCase())
+        tests: JSON.stringify(testNamesArray) // 👈 Database isko string/array samajh kar save karega
       };
+      
       if (api?.saveBooking) {
         const res = await api.saveBooking(payload);
         if (res?.success) {

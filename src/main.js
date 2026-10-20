@@ -1,265 +1,211 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, net } from "electron";
 import path from "node:path";
 import started from "electron-squirrel-startup";
-import sqlite3Pkg from "sqlite3";
+import os from "node:os";
 
-const sqlite3 = sqlite3Pkg.verbose();
-
-// 1. Database connection
-const dbPath = path.join(app.getPath("userData"), "patho_manager.sqlite");
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error("Database connection error:", err);
-  else console.log("Connected to SQLite at:", dbPath);
-});
-
-// 2. Tables create karna & Auto-seed
-db.serialize(() => {
-  // Bookings Table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS bookings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      bookingDate TEXT,
-      patientName TEXT,
-      age INTEGER,
-      gender TEXT,
-      doctor TEXT,
-      totalAmount REAL,
-      discount REAL,
-      paidAmount REAL,
-      balance REAL
-    )
-  `);
-db.run(`
-      CREATE TABLE IF NOT EXISTS tests (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        cost REAL DEFAULT 0,
-        normalRange TEXT
-      )
-    `);
-
-    // 2. 🧹 Sabse pehle saare duplicates ko permanently saaf karein (Case & Space insensitive)
-    db.run(`
-      DELETE FROM tests
-      WHERE id NOT IN (
-        SELECT MIN(id)
-        FROM tests
-        GROUP BY UPPER(TRIM(name))
-      )
-    `);
-
-    // 3. 🔒 Ab Unique Index banayein taaki future me kabhi duplicate entry aa hi na sake
-    db.run(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_tests_name_unique 
-      ON tests (UPPER(TRIM(name)))
-    `);
-
-  // Reports Table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS reports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      patient_id INTEGER,
-      selected_tests TEXT,
-      results TEXT,
-      comments TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Doctors Table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS doctors (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      degree TEXT,
-      hospital TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  
-
-  // Seed Default Doctors (agar table empty ho)
-  db.get("SELECT COUNT(*) as count FROM doctors", (err, row) => {
-    if (!err && row && row.count === 0) {
-      const stmt = db.prepare(
-        "INSERT INTO doctors (name, degree) VALUES (?, ?)",
-      );
-      stmt.run("SELF", "");
-      stmt.run("Dr. DR NARESH G. UMERJAKER", "MBBS, DCH");
-      stmt.finalize();
-      console.log("Default doctors seeded successfully.");
+function getMacAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (!iface.internal && iface.mac !== '00:00:00:00:00:00') {
+        return iface.mac;
+      }
     }
+  }
+  return "UNKNOWN_MAC";
+}
+
+// 👇 Apni nayi database file ko yahan import karein
+import db from "./database.js"; // agar error aaye toh require('./database.js') use karein
+
+if (started) {
+  app.quit();
+}
+
+let isQuitting = false;
+
+
+
+// ==========================================
+// 1. CLOUD SYNC FUNCTIONS
+// ==========================================
+async function syncLicenseWithCloud() {
+  try {
+    db.all("SELECT * FROM app_config", [], async (err, rows) => {
+      if (err || !rows || rows.length === 0) return;
+      
+      const config = {};
+      rows.forEach((r) => (config[r.key] = r.value));
+
+      if (!config.lab_id || !config.pin || !config.mac_address) return;
+
+      console.log("Checking license securely for Lab ID:", config.lab_id);
+
+      const response = await fetch("https://lms-backend-lab-s.vercel.app/api/check-license", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          labId: config.lab_id, 
+          pin: config.pin, 
+          macAddress: config.mac_address 
+        }),
+      });
+
+      const rawText = await response.text();
+      try {
+        const data = JSON.parse(rawText);
+        if (response.ok) {
+          const workingStatus = data.working ? "true" : "false";
+          db.run("UPDATE app_config SET value = ? WHERE key = 'working'", [workingStatus]);
+        }
+      } catch (jsonErr) {
+        console.error("Invalid JSON:", rawText.substring(0, 50));
+      }
+    });
+  } catch (err) {
+    console.log("Offline Mode: Could not connect to licensing server.");
+  }
+}
+
+async function syncLocalDataToCloud() {
+  db.get("SELECT value FROM app_config WHERE key = 'lab_id'", (err, row) => {
+    if (!row || !row.value) return;
+    const labId = row.value;
+
+    db.all("SELECT * FROM bookings", [], async (err, bookings) => {
+      if (err || bookings.length === 0) return;
+      const syncPayload = bookings.map(b => ({ tableName: 'bookings', localId: b.id, recordData: b }));
+
+      try {
+        await fetch('https://lms-backend-lab-s.vercel.app/api/sync-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ labId: labId, records: syncPayload })
+        });
+      } catch (syncErr) {}
+    });
   });
+}
 
-  // Seed Default Tests (agar table empty ho)
+// ==========================================
+// 2. IPC HANDLERS (Frontend se baat karne ke liye)
+// ==========================================
 
- const masterTests = [
-    // --- Hematology ---
-    { name: 'CBC', cost: 350 },
-    { name: 'ESR', cost: 100 },
-    { name: 'BLOOD GROUP', cost: 100 },
-    { name: 'MP (MALARIA PARASITE)', cost: 150 },
-    { name: 'PERIPHERAL SMEAR', cost: 250 },
-    { name: 'AEC (ABSOLUTE EOSINOPHIL COUNT)', cost: 150 },
-    { name: 'BT & CT', cost: 150 },
-    { name: 'PT / INR', cost: 400 },
-    { name: 'APTT', cost: 450 },
-    { name: 'RETICULOCYTE COUNT', cost: 200 },
-    
-    // --- Diabetology ---
-    { name: 'FBS (FASTING BLOOD SUGAR)', cost: 80 },
-    { name: 'PPBS (POST PRANDIAL BLOOD SUGAR)', cost: 80 },
-    { name: 'RBS (RANDOM BLOOD SUGAR)', cost: 80 },
-    { name: 'HBA1C (GLYCOSYLATED HB)', cost: 500 },
-    { name: 'GTT (GLUCOSE TOLERANCE TEST)', cost: 300 },
-    { name: 'INSULIN FASTING', cost: 600 },
-    
-    // --- Biochemistry Profiles ---
-    { name: 'LFT (LIVER FUNCTION TEST)', cost: 700 },
-    { name: 'KFT (KIDNEY FUNCTION TEST)', cost: 700 },
-    { name: 'LIPID PROFILE', cost: 650 },
-    
-    // --- Biochemistry Individual ---
-    { name: 'BLOOD UREA', cost: 150 },
-    { name: 'SERUM CREATININE', cost: 150 },
-    { name: 'URIC ACID', cost: 150 },
-    { name: 'SGOT (AST)', cost: 150 },
-    { name: 'SGPT (ALT)', cost: 150 },
-    { name: 'BILIRUBIN (TOTAL & DIRECT)', cost: 200 },
-    { name: 'ALKALINE PHOSPHATASE (ALP)', cost: 180 },
-    { name: 'TOTAL PROTEIN & A/G RATIO', cost: 250 },
-    
-    // --- Electrolytes & Minerals ---
-    { name: 'ELECTROLYTES (NA, K, CL)', cost: 450 },
-    { name: 'CALCIUM (TOTAL)', cost: 200 },
-    { name: 'PHOSPHORUS', cost: 200 },
-    { name: 'MAGNESIUM', cost: 300 },
-    { name: 'IRON PROFILE', cost: 800 },
-    { name: 'FERRITIN', cost: 750 },
-    
-    // --- Serology & Immunology ---
-    { name: 'CRP (C-REACTIVE PROTEIN)', cost: 350 },
-    { name: 'CRP QUANTITATIVE', cost: 500 },
-    { name: 'WIDAL (SLIDE TEST)', cost: 150 },
-    { name: 'WIDAL (TUBE TEST)', cost: 250 },
-    { name: 'TYPHIDOT', cost: 450 },
-    { name: 'DENGUE NS1', cost: 600 },
-    { name: 'DENGUE IGG/IGM', cost: 600 },
-    { name: 'CHIKUNGUNYA IGM', cost: 700 },
-    { name: 'MALARIA ANTIGEN (RAPID)', cost: 300 },
-    
-    // --- Viral Markers ---
-    { name: 'VIRAL MARKERS (ALL 4)', cost: 1000 },
-    { name: 'HIV (I & II)', cost: 300 },
-    { name: 'HBSAG (HEPATITIS B)', cost: 300 },
-    { name: 'HCV (HEPATITIS C)', cost: 400 },
-    { name: 'VDRL / RPR', cost: 200 },
-    
-    // --- Arthritis & Autoimmune ---
-    { name: 'RA FACTOR', cost: 350 },
-    { name: 'ASO TITRE', cost: 350 },
-    { name: 'ANA (ANTI NUCLEAR ANTIBODY)', cost: 750 },
-    { name: 'ANTI CCP', cost: 1200 },
-    
-    // --- Hormones & Vitamins ---
-    { name: 'THYROID PROFILE (T3, T4, TSH)', cost: 500 },
-    { name: 'FREE THYROID PROFILE (FT3, FT4, TSH)', cost: 750 },
-    { name: 'VITAMIN D3 (25 OH)', cost: 1200 },
-    { name: 'VITAMIN B12', cost: 1000 },
-    { name: 'PROLACTIN', cost: 450 },
-    { name: 'FSH', cost: 450 },
-    { name: 'LH', cost: 450 },
-    { name: 'TESTOSTERONE (TOTAL)', cost: 600 },
-    
-    // --- Cardiac & Pancreas ---
-    { name: 'CPK TOTAL', cost: 400 },
-    { name: 'CK MB', cost: 500 },
-    { name: 'TROPONIN I (QUALITATIVE)', cost: 600 },
-    { name: 'SERUM AMYLASE', cost: 350 },
-    { name: 'SERUM LIPASE', cost: 450 },
-    
-    // --- Tumor Markers ---
-    { name: 'PSA (TOTAL)', cost: 650 },
-    { name: 'CEA', cost: 800 },
-    { name: 'CA 125', cost: 900 },
-    { name: 'AFP (ALPHA FETO PROTEIN)', cost: 750 },
-    
-    // --- Clinical Pathology & Micro ---
-    { name: 'URINE ROUTINE & MICROSCOPY', cost: 150 },
-    { name: 'STOOL ROUTINE', cost: 150 },
-    { name: 'STOOL OCCULT BLOOD', cost: 150 },
-    { name: 'SEMEN ANALYSIS', cost: 400 },
-    { name: 'URINE CULTURE', cost: 600 },
-    { name: 'BLOOD CULTURE', cost: 800 },
-    { name: 'SPUTUM FOR AFB', cost: 200 }
-  ];
-
-  // 3. SAFE SEEDING LOGIC (INSERT OR IGNORE)
-  // Ye nayi strategy check karegi ki agar koi test pehle se hai toh use ignore karegi,
-  // aur jo naye tests hain sirf unhe add karegi. User ke purane tests aur custom costs delete nahi honge.
-  const stmt = db.prepare("INSERT OR IGNORE INTO tests (name, cost, normalRange) VALUES (?, ?, ?)");
-  
-  masterTests.forEach((test) => {
-    stmt.run(test.name, test.cost, '');
-  });
-  
-  stmt.finalize();
-  console.log("Default tests synchronized safely into Test Master.");
-});
-
-// 3. Bookings Handlers
-ipcMain.handle("save-booking", (event, bookingData) => {
+ipcMain.handle("get-lab-config", () => {
   return new Promise((resolve, reject) => {
-    const {
-      bookingDate,
-      patientName,
-      age,
-      gender,
-      doctor,
-      totalAmount,
-      discount,
-      paidAmount,
-    } = bookingData;
-    const balance = (totalAmount || 0) - (discount || 0) - (paidAmount || 0);
-
-    const query = `INSERT INTO bookings (bookingDate, patientName, age, gender, doctor, totalAmount, discount, paidAmount, balance) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-    db.run(
-      query,
-      [
-        bookingDate,
-        patientName,
-        age,
-        gender,
-        doctor,
-        totalAmount,
-        discount,
-        paidAmount,
-        balance,
-      ],
-      function (err) {
-        if (err) reject(err.message);
-        else resolve({ success: true, bookingId: this.lastID });
-      },
-    );
+    db.all("SELECT * FROM app_config", [], (err, rows) => {
+      if (err) reject(err);
+      else {
+        const config = {};
+        rows.forEach((r) => (config[r.key] = r.value));
+        resolve(config);
+      }
+    });
   });
 });
 
-ipcMain.handle("get-bookings", () => {
-  return new Promise((resolve, reject) => {
-    db.all(
-      "SELECT * FROM bookings ORDER BY id DESC LIMIT 100",
-      [],
-      (err, rows) => {
-        if (err) reject(err.message);
-        else resolve(rows || []);
-      },
-    );
+ipcMain.handle("verify-and-save-lab-id", async (event, authData) => {
+  try {
+    const inputId = authData.labId.trim().toUpperCase();
+    const inputPin = authData.pin.trim();
+    const macAddress = getMacAddress(); // PC ka Hardware ID nikala
+    
+    // Cloud par check karo
+    const response = await fetch('https://lms-backend-lab-s.vercel.app/api/check-license', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labId: inputId, pin: inputPin, macAddress: macAddress })
+    });
+    
+    const data = await response.json();
+
+    // Agar valid hai, toh SQLite database mein sab save kar do
+    if (data.working === true) {
+      db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES ('lab_id', ?)", [inputId]);
+      db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES ('pin', ?)", [inputPin]);
+      db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES ('mac_address', ?)", [macAddress]);
+      db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES ('working', 'true')");
+      db.run("INSERT OR REPLACE INTO app_config (key, value) VALUES ('expiry_date', ?)", [data.expiryDate || '']);
+      
+      return { success: true, message: "License Activated Successfully!" };
+    } else {
+      // Agar ID block hai, PIN galat hai, ya PC lock hai
+      return { success: false, message: data.message || "Invalid Details!" };
+    }
+  } catch (err) {
+    return { success: false, message: "Network Error! Server se connect nahi ho paaya." };
+  }
+});
+
+// ==========================================
+// 💾 SAVE REPORT DATA (Test Results)
+// ==========================================
+ipcMain.handle("save-report", async (event, data) => {
+  return new Promise((resolve) => {
+    // Frontend se jo ID aayegi (Booking ID ya Patient ID) aur test results
+    const id = data.id || data.booking_id || data.patientId; 
+    const resultsJSON = JSON.stringify(data.results || data);
+
+    // Hum bookings table mein results ko save kar rahe hain
+    const query = `UPDATE bookings SET results = ? WHERE id = ?`;
+
+    db.run(query, [resultsJSON, id], function (err) {
+      if (err) {
+        console.error("Save Report Error:", err);
+        
+        // Agar 'results' column database me nahi hai, toh yeh usko auto-add karne ka backup logic hai
+        if (err.message.includes("no such column: results")) {
+          db.run("ALTER TABLE bookings ADD COLUMN results TEXT", () => {
+            // Column banne ke baad dobara save try karo
+            db.run(query, [resultsJSON, id], (retryErr) => {
+              if (retryErr) {
+                resolve({ success: false, message: "Database Error: " + retryErr.message });
+              } else {
+                resolve({ success: true, message: "Report saved successfully!" });
+              }
+            });
+          });
+        } else {
+          resolve({ success: false, message: "Error saving report: " + err.message });
+        }
+      } else {
+        resolve({ success: true, message: "Report saved successfully!" });
+      }
+    });
   });
 });
 
-// 4. Test Catalog Handlers (Single Registration)
+// ==========================================
+// 📂 GET REPORT DATA (Saved Results lana)
+// ==========================================
+ipcMain.handle("get-report", async (event, id) => {
+  return new Promise((resolve) => {
+    // Booking table se us ID ka result nikalna
+    db.get("SELECT results FROM bookings WHERE id = ?", [id], (err, row) => {
+      if (err) {
+        console.error("Get Report Error:", err);
+        resolve({ success: false, message: err.message });
+      } else if (row && row.results) {
+        try {
+          // JSON string ko wapas Object bana kar frontend ko dena
+          const data = JSON.parse(row.results);
+          resolve({ success: true, data: data });
+        } catch (e) {
+          resolve({ success: false, message: "Invalid data format in database" });
+        }
+      } else {
+        // Agar pehle se koi report save nahi hai
+        resolve({ success: true, data: null }); 
+      }
+    });
+  });
+});
+
+// ==========================================
+// 🚀 ALL IPC HANDLERS (Tests, Doctors, Bookings, Reports)
+// ==========================================
+
+// --- TESTS HANDLERS ---
 ipcMain.handle("get-tests", () => {
   return new Promise((resolve, reject) => {
     db.all("SELECT * FROM tests ORDER BY id ASC", [], (err, rows) => {
@@ -272,28 +218,24 @@ ipcMain.handle("get-tests", () => {
 ipcMain.handle("add-test", (event, testData) => {
   return new Promise((resolve, reject) => {
     const { name, cost, normalRange } = testData;
-    db.run(
-      "INSERT INTO tests (name, cost, normalRange) VALUES (?, ?, ?)",
+    db.run("INSERT INTO tests (name, cost, normalRange) VALUES (?, ?, ?)",
       [name.trim().toUpperCase(), Number(cost) || 0, normalRange || ""],
       function (err) {
         if (err) reject(err.message);
         else resolve({ success: true, id: this.lastID });
-      },
-    );
+      });
   });
 });
 
 ipcMain.handle("update-test", (event, testData) => {
   return new Promise((resolve, reject) => {
     const { id, name, cost, normalRange } = testData;
-    db.run(
-      "UPDATE tests SET name = ?, cost = ?, normalRange = ? WHERE id = ?",
+    db.run("UPDATE tests SET name = ?, cost = ?, normalRange = ? WHERE id = ?",
       [name.trim().toUpperCase(), Number(cost) || 0, normalRange || "", id],
       function (err) {
         if (err) reject(err.message);
         else resolve({ success: true });
-      },
-    );
+      });
   });
 });
 
@@ -306,89 +248,7 @@ ipcMain.handle("delete-test", (event, id) => {
   });
 });
 
-
-// 5. Reports Handlers
-ipcMain.handle("save-report", (event, reportData) => {
-  return new Promise((resolve, reject) => {
-    const { patientId, selectedTests, results, comments } = reportData;
-
-    db.get(
-      "SELECT id FROM reports WHERE patient_id = ?",
-      [patientId],
-      (err, row) => {
-        if (err) return reject(err.message);
-
-        if (row) {
-          const updateQuery = `
-          UPDATE reports 
-          SET selected_tests = ?, results = ?, comments = ?, created_at = CURRENT_TIMESTAMP 
-          WHERE patient_id = ?
-        `;
-          db.run(
-            updateQuery,
-            [
-              JSON.stringify(selectedTests),
-              JSON.stringify(results),
-              comments || "",
-              patientId,
-            ],
-            function (updateErr) {
-              if (updateErr) reject(updateErr.message);
-              else resolve({ success: true, reportId: row.id, updated: true });
-            },
-          );
-        } else {
-          const insertQuery = `
-          INSERT INTO reports (patient_id, selected_tests, results, comments) 
-          VALUES (?, ?, ?, ?)
-        `;
-          db.run(
-            insertQuery,
-            [
-              patientId,
-              JSON.stringify(selectedTests),
-              JSON.stringify(results),
-              comments || "",
-            ],
-            function (insertErr) {
-              if (insertErr) reject(insertErr.message);
-              else
-                resolve({
-                  success: true,
-                  reportId: this.lastID,
-                  inserted: true,
-                });
-            },
-          );
-        }
-      },
-    );
-  });
-});
-
-ipcMain.handle("get-report", (event, patientId) => {
-  return new Promise((resolve, reject) => {
-    db.get(
-      "SELECT * FROM reports WHERE patient_id = ? ORDER BY id DESC LIMIT 1",
-      [patientId],
-      (err, row) => {
-        if (err) {
-          reject(err.message);
-        } else if (!row) {
-          resolve(null);
-        } else {
-          resolve({
-            ...row,
-            selectedTests: JSON.parse(row.selected_tests || "[]"),
-            results: JSON.parse(row.results || "{}"),
-          });
-        }
-      },
-    );
-  });
-});
-
-// 6. Doctor Management Handlers
+// --- DOCTORS HANDLERS ---
 ipcMain.handle("get-doctors", () => {
   return new Promise((resolve, reject) => {
     db.all("SELECT * FROM doctors ORDER BY name ASC", [], (err, rows) => {
@@ -401,19 +261,12 @@ ipcMain.handle("get-doctors", () => {
 ipcMain.handle("add-doctor", (event, docData) => {
   return new Promise((resolve, reject) => {
     const { name, degree, hospital } = docData;
-    const query =
-      "INSERT INTO doctors (name, degree, hospital) VALUES (?, ?, ?)";
-    db.run(query, [name.trim(), degree || "", hospital || ""], function (err) {
-      if (err) {
-        if (err.message.includes("UNIQUE")) {
-          reject("Yeh doctor pehle se list me maujood hai.");
-        } else {
-          reject(err.message);
-        }
-      } else {
-        resolve({ success: true, id: this.lastID });
-      }
-    });
+    db.run("INSERT INTO doctors (name, degree, hospital) VALUES (?, ?, ?)", 
+      [name.trim(), degree || "", hospital || ""], 
+      function (err) {
+        if (err) reject(err.message.includes("UNIQUE") ? "Doctor already exists." : err.message);
+        else resolve({ success: true, id: this.lastID });
+      });
   });
 });
 
@@ -426,11 +279,240 @@ ipcMain.handle("delete-doctor", (event, doctorId) => {
   });
 });
 
-// 7. Window Creation
-if (started) {
-  app.quit();
-}
+ipcMain.handle("get-patient-history", async (event, data) => {
+  return new Promise((resolve) => {
+    try {
+      const mobile = data.mobile || "";
+      const fromDate = data.fromDate || "";
+      const toDate = data.toDate || "";
 
+      let query = `
+        SELECT b.id as booking_id, b.bookingDate as booking_date, b.doctor, b.tests, b.results, b.totalAmount as total_amount,
+               p.name, p.age, p.gender, p.mobile
+        FROM bookings b
+        JOIN patients p ON b.patient_id = p.id
+        WHERE 1=1
+      `;
+      let params = [];
+
+      if (mobile) {
+        query += ` AND p.mobile LIKE ?`;
+        params.push(`%${mobile}%`);
+      }
+
+      if (fromDate && toDate) {
+        query += ` AND b.bookingDate BETWEEN ? AND ?`;
+        params.push(fromDate, toDate);
+      }
+
+      query += ` ORDER BY b.bookingDate DESC`;
+
+      db.all(query, params, (err, rows) => {
+        if (err) resolve({ success: false, message: err.message });
+        else resolve({ success: true, data: rows });
+      });
+    } catch (err) {
+      resolve({ success: false, message: err.message });
+    }
+  });
+});
+// ==========================================
+// CLOUD RESTORE (Vercel se Local me save)
+// ==========================================
+ipcMain.handle("restore-from-cloud", async () => {
+  return new Promise((resolve) => {
+    db.get("SELECT value FROM app_config WHERE key = 'lab_id'", async (err, row) => {
+      if (err || !row || !row.value) {
+        return resolve({ success: false, message: "Lab ID not found. Please activate software first." });
+      }
+
+      const labId = row.value;
+
+      try {
+        const response = await fetch("https://lms-backend-lab-s.vercel.app/api/restore-data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ labId })
+        });
+
+        const data = await response.json();
+
+        if (!data.success || !data.records || data.records.length === 0) {
+          return resolve({ success: true, message: "No previous data found on cloud to restore." });
+        }
+
+        db.serialize(() => {
+          db.run("BEGIN TRANSACTION");
+
+          data.records.forEach((record) => {
+            const table = record.tableName;
+            const rowData = record.recordData;
+
+            if (table === "patients") {
+              const stmt = db.prepare("INSERT OR REPLACE INTO patients (id, name, age, gender, mobile) VALUES (?, ?, ?, ?, ?)");
+              stmt.run(rowData.id, rowData.name, rowData.age, rowData.gender, rowData.mobile);
+              stmt.finalize();
+            } 
+            else if (table === "bookings") {
+              const stmt = db.prepare("INSERT OR REPLACE INTO bookings (id, patient_id, tests, total_amount, advance, balance, booking_date, doctor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+              stmt.run(rowData.id, rowData.patient_id, rowData.tests, rowData.total_amount, rowData.advance, rowData.balance, rowData.booking_date, rowData.doctor);
+              stmt.finalize();
+            }
+          });
+
+          db.run("COMMIT", (commitErr) => {
+            if (commitErr) {
+              db.run("ROLLBACK");
+              resolve({ success: false, message: "Failed to save restored data locally." });
+            } else {
+              resolve({ success: true, message: `Successfully restored ${data.records.length} records!` });
+            }
+          });
+        });
+
+      } catch (networkErr) {
+        resolve({ success: false, message: "Network Error! Could not connect to cloud." });
+      }
+    });
+  });
+});
+
+
+// --- SMART BOOKINGS HANDLER (WITH PATIENT CHECK) ---
+ipcMain.handle('save-booking', async (event, data) => {
+  return new Promise((resolve) => {
+    const {
+      bookingDate,
+      patientName,
+      mobile, 
+      age,
+      gender,
+      doctor,
+      totalAmount,
+      discount,
+      paidAmount,
+      tests
+    } = data;
+    
+    const testsData = tests || "[]"; 
+    const balance = (totalAmount || 0) - (discount || 0) - (paidAmount || 0);
+
+    // 👇 YAHAN SMART FIX HAI: Ab app 'mobile' ke sath 'name' bhi match karega
+    db.get("SELECT id FROM patients WHERE mobile = ? AND name = ?", [mobile, patientName], (err, row) => {
+      if (err) return resolve({ success: false, error: err.message });
+
+      if (row) {
+        // Agar Naam aur Mobile DONO match karte hain, toh same patient ki age/gender update karke nai booking banao
+        db.run("UPDATE patients SET age = ?, gender = ? WHERE id = ?", [age, gender, row.id], () => {
+          insertBooking(row.id);
+        });
+      } else {
+        // Agar Mobile same hai lekin Naam alag hai (jaise family member), ya bilkul naya number hai, toh naya patient banao
+        db.run("INSERT INTO patients (name, mobile, age, gender) VALUES (?, ?, ?, ?)", 
+          [patientName, mobile, age, gender], 
+          function (err2) {
+            if (err2) return resolve({ success: false, error: err2.message });
+            insertBooking(this.lastID); // Naye family member ki ID use karo
+          }
+        );
+      }
+    });
+
+    // Booking Insert karne ka function
+    function insertBooking(patientId) {
+      db.run(`INSERT INTO bookings (patient_id, bookingDate, doctor, tests, totalAmount, discount, paidAmount, balance) 
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [patientId, bookingDate, doctor, testsData, totalAmount, discount, paidAmount, balance],
+        function (err3) {
+          if (err3) resolve({ success: false, error: err3.message });
+          else resolve({ success: true, bookingId: this.lastID });
+        }
+      );
+    }
+  });
+});
+
+
+// --- GET BOOKINGS (JOIN PATIENT INFO) ---
+ipcMain.handle("get-bookings", () => {
+  return new Promise((resolve, reject) => {
+    // Ab data do tables se mila kar lana hoga (JOIN ka magic!)
+    const query = `
+      SELECT b.*, p.name as patientName, p.mobile, p.age, p.gender 
+      FROM bookings b
+      JOIN patients p ON b.patient_id = p.id
+      ORDER BY b.id DESC LIMIT 100
+    `;
+    db.all(query, [], (err, rows) => {
+      if (err) reject(err.message);
+      else resolve(rows || []);
+    });
+  });
+});
+
+// ==========================================
+// IMPORT OLD DATA (CSV / Excel Migration)
+// ==========================================
+ipcMain.handle("import-old-data", async (event, rows) => {
+  return new Promise((resolve) => {
+    db.serialize(async () => {
+      db.run("BEGIN TRANSACTION;");
+
+      // SQLite ke purane callbacks ko naye Promise me convert karna (taaki await kaam kare)
+      const runQuery = (query, params) => new Promise((res, rej) => db.run(query, params, function(err) { if (err) rej(err); else res(this); }));
+      const getQuery = (query, params) => new Promise((res, rej) => db.get(query, params, (err, row) => { if (err) rej(err); else res(row); }));
+
+      try {
+        for (const row of rows) {
+          if (!row.mobile) continue; // Mobile number zaruri hai
+
+          // 1. Patient ko insert karo (Agar pehle se nahi hai toh)
+          await runQuery(
+            `INSERT OR IGNORE INTO patients (name, age, gender, mobile) VALUES (?, ?, ?, ?)`,
+            [row.name || 'Unknown', row.age || null, row.gender || '', row.mobile]
+          );
+
+          // 2. Patient ki ID lo (naya ho ya purana)
+          const patient = await getQuery(`SELECT id FROM patients WHERE mobile = ?`, [row.mobile]);
+
+          if (patient) {
+            // 3. Patient ki Booking/Tests save karo
+            await runQuery(
+              `INSERT INTO bookings (patient_id, bookingDate, doctor, tests, results, totalAmount, discount, paidAmount, balance) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                patient.id,
+                row.date || new Date().toISOString().split('T')[0],
+                row.doctor || 'SELF',
+                row.tests ? `["${row.tests}"]` : '["CBC"]', // Tests ko array string me badalna taaki frontend crash na ho
+                '{}', 
+                parseFloat(row.amount) || 0,
+                0,
+                parseFloat(row.amount) || 0,
+                0
+              ]
+            );
+          }
+        }
+
+        // Sab successfully insert hone ke baad save (COMMIT) karo
+        db.run("COMMIT;", (err) => {
+          if (err) resolve({ success: false, message: err.message });
+          else resolve({ success: true, message: `Successfully imported records!` });
+        });
+
+      } catch (error) {
+        db.run("ROLLBACK;"); // Agar koi error aaye toh changes wapas le lo
+        resolve({ success: false, message: "Import failed: " + error.message });
+      }
+    });
+  });
+});
+
+
+// ==========================================
+// 3. WINDOW LIFECYCLE
+// ==========================================
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
     width: 1200,
@@ -443,24 +525,30 @@ const createWindow = () => {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    );
+    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
   }
+
+  // Smart Sync & Exit
+  mainWindow.on('close', async (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    mainWindow.hide();
+
+    try {
+      const isOnline = await net.isOnline();
+      if (isOnline) {
+        const safetyTimer = setTimeout(() => { isQuitting = true; app.quit(); }, 3000);
+        await syncLocalDataToCloud(); 
+        clearTimeout(safetyTimer);
+      }
+    } catch (err) {}
+    isQuitting = true;
+    app.quit();
+  });
 };
 
 app.whenReady().then(() => {
   createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  syncLicenseWithCloud();
+  setTimeout(() => syncLocalDataToCloud(), 5000);
 });

@@ -2,20 +2,49 @@ import React from 'react';
 import { TEST_CATALOG } from '../../testCatalog';
 
 export default function TestSearchToolbar({ selectedTests, setSelectedTests, searchQuery, setSearchQuery }) {
+  
+  // 1. Safety Check: Guarantee ki selectedTests hamesha Array hi ho
+  const safeSelected = Array.isArray(selectedTests) ? selectedTests : typeof selectedTests === 'string' ? [selectedTests] : [];
+
   const filteredCatalog = Object.keys(TEST_CATALOG).filter(key => 
     (key.toLowerCase().includes(searchQuery.toLowerCase()) || 
      TEST_CATALOG[key].name.toLowerCase().includes(searchQuery.toLowerCase())) && 
-    !selectedTests.includes(key)
+    !safeSelected.includes(key)
   );
+
+  // 2. Smart Add Function: Hamesha latest list me add karega
+  const handleAddTest = (key) => {
+    setSelectedTests(prev => {
+      const prevArr = Array.isArray(prev) ? prev : typeof prev === 'string' ? [prev] : [];
+      if (!prevArr.includes(key)) {
+        return [...prevArr, key]; // Purane tests ke aage naya test lagao
+      }
+      return prevArr;
+    });
+    setSearchQuery(''); // Search bar clear karo
+  };
+
+  // 3. Smart Remove Function
+  const handleRemoveTest = (key) => {
+    setSelectedTests(prev => {
+      const prevArr = Array.isArray(prev) ? prev : typeof prev === 'string' ? [prev] : [];
+      return prevArr.filter(t => t !== key);
+    });
+  };
 
   return (
     <div className="p-2.5 bg-blue-50/50 border border-blue-200 rounded-lg mb-2 shrink-0 flex flex-col gap-2.5 shadow-sm">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[11px] font-bold text-blue-950 uppercase tracking-wider mr-1">Booked Tests:</span>
-        {selectedTests.map((key) => (
+        {safeSelected.map((key) => (
           <div key={key} className="flex items-center bg-blue-600 text-white px-2.5 py-1 rounded shadow-sm text-[11px] font-bold">
             <span>✓ {key}</span>
-            <button onClick={() => setSelectedTests(selectedTests.filter(t => t !== key))} className="ml-2 hover:bg-rose-500 rounded-full w-4 h-4 flex items-center justify-center text-[9px] bg-blue-800/50 cursor-pointer">✕</button>
+            <button 
+              onClick={() => handleRemoveTest(key)} 
+              className="ml-2 hover:bg-rose-500 rounded-full w-4 h-4 flex items-center justify-center text-[9px] bg-blue-800/50 cursor-pointer"
+            >
+              ✕
+            </button>
           </div>
         ))}
       </div>
@@ -32,7 +61,11 @@ export default function TestSearchToolbar({ selectedTests, setSelectedTests, sea
         {searchQuery && (
           <div className="absolute top-8 left-0 w-full bg-white border border-slate-200 shadow-2xl max-h-48 overflow-y-auto z-50 rounded-lg divide-y">
             {filteredCatalog.map(key => (
-              <div key={key} onClick={() => { setSelectedTests([...selectedTests, key]); setSearchQuery(''); }} className="px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-blue-50 cursor-pointer">
+              <div 
+                key={key} 
+                onClick={() => handleAddTest(key)} 
+                className="px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-blue-50 cursor-pointer"
+              >
                 + {TEST_CATALOG[key].name} ({key})
               </div>
             ))}
