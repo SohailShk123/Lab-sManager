@@ -1,11 +1,11 @@
 import React from 'react';
-import { useRegistration } from './hook/useRegistration';
-import PatientDetailsSection from './components/RegisFormComp/PatientDetailsSection';
-import TestSelectionSection from './components/RegisFormComp/TestSelectionSection';
-import BillingSummarySection from './components/RegisFormComp/BillingSummarySection.jsx'
-import DoctorMasterModal from './components/RegisFormComp/DoctorMasterModal';
-import InvoicePreviewModal from './components/RegisFormComp/PreviewIncoive.jsx';
-import PrintInvoice from './components/RegisFormComp/PrintInvoice.jsx';
+import { useRegistration } from '../hook/useRegistration';
+import PatientDetailsSection from '../components/RegisFormComp/PatientDetailsSection';
+import TestSelectionSection from '../components/RegisFormComp/TestSelectionSection';
+import BillingSummarySection from '../components/RegisFormComp/BillingSummarySection.jsx'
+import DoctorMasterModal from '../components/RegisFormComp/DoctorMasterModal';
+import InvoicePreviewModal from '../components/RegisFormComp/PreviewIncoive.jsx';
+import PrintInvoice from '../components/RegisFormComp/PrintInvoice.jsx';
 
 
 export default function RegistrationForm() {

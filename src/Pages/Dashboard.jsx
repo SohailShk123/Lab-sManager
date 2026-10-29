@@ -9,6 +9,7 @@ export default function Dashboard({ onNavigate }) {
   });
 
   const [recentBookings, setRecentBookings] = useState([]);
+  console.log(recentBookings , 'recentBooking')
 
   useEffect(() => {
     const loadDashboardData = async () => {
@@ -75,38 +76,44 @@ export default function Dashboard({ onNavigate }) {
       </div>
 
       {/* Quick Actions & Recent Patients */}
-      <div className="grid grid-cols-3 gap-8">
+     <div className="grid grid-cols-3 gap-8">
         <div className="col-span-2 bg-white p-6 rounded-2xl shadow-lg border border-slate-100">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold text-slate-800">Recent Registrations</h2>
             <button onClick={() => onNavigate('list')} className="text-blue-600 font-bold hover:underline text-sm">View All</button>
           </div>
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="p-3">ID</th>
-                <th className="p-3">Patient Name</th>
-                <th className="p-3">Amount</th>
-                <th className="p-3">Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentBookings.length === 0 ? (
-                <tr><td colSpan="4" className="p-4 text-center text-slate-400">No recent patients.</td></tr>
-              ) : recentBookings.map(p => (
-                <tr key={p.id} className="border-b border-slate-50">
-                  <td className="p-3 font-bold text-blue-600">#{p.id}</td>
-                  <td className="p-3 font-semibold text-slate-800">{p.patientName}</td>
-                  <td className="p-3">₹{p.totalAmount - p.discount}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${p.balance > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                      ₹{p.balance}
-                    </span>
-                  </td>
+          
+          {/* 👇 Yahan Scrollable Container Add Kiya Hai */}
+          <div className="max-h-[250px] overflow-y-auto custom-scrollbar pr-2">
+            <table className="w-full text-left text-sm relative">
+              <thead className="text-slate-600">
+                {/* Headers ko Sticky aur Shadow diya hai */}
+                <tr>
+                  <th className="p-3 sticky top-0 bg-slate-50 z-10 shadow-sm">ID</th>
+                  <th className="p-3 sticky top-0 bg-slate-50 z-10 shadow-sm">Patient Name</th>
+                  <th className="p-3 sticky top-0 bg-slate-50 z-10 shadow-sm">Amount</th>
+                  <th className="p-3 sticky top-0 bg-slate-50 z-10 shadow-sm">Balance</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {recentBookings.length === 0 ? (
+                  <tr><td colSpan="4" className="p-4 text-center text-slate-400">No recent patients.</td></tr>
+                ) : recentBookings.map(p => 
+                  (
+                  <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50">
+                    <td className="p-3 font-bold text-blue-600">#{p.id}</td>
+                    <td className="p-3 font-semibold text-slate-800">{p.patientName || p.name || p.patient_name || "Unknown"}</td>
+                    <td className="p-3">₹{p.totalAmount - p.discount}</td>
+                    <td className="p-3">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${p.balance > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                        ₹{p.balance}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Quick Actions */}
@@ -116,7 +123,7 @@ export default function Dashboard({ onNavigate }) {
             + New Registration
           </button>
           <button onClick={() => onNavigate('settings')} className="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 rounded-xl shadow-md transition-all">
-            ⚙️️ Test Master (Settings)
+            ⚙ Test Master (Settings)
           </button>
         </div>
       </div>

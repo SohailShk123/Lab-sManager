@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
-import Dashboard from './Dashboard';
-import RegistrationForm from './RegistrationForm';
-import PatientList from './PatientList';
-import ResultEntry from './ResultEntry';
-import TestMaster from './TestMaster';
-import PatientHistoryAndRestore from './components/patienthistory/PatientHistoryAndRestore'; // 1. Component Import kiya
+import Dashboard from './Pages/Dashboard';
+import RegistrationForm from './Pages/RegistrationForm';
+import PatientList from './Pages/PatientList';
+import ResultEntry from './Pages/ResultEntry';
+import TestMaster from './Pages/TestMaster';
+import Admin from './Pages/Admin';
+import PatientHistoryAndRestore from './components/patienthistory/PatientHistoryAndRestore'; 
 
 function App() {
   // Authentication states
@@ -119,6 +120,7 @@ function App() {
         <button onClick={() => setActiveTab('settings')} className={navBtnClass('settings')}>Test Master</button>
         {/* 2. Naya Navbar Button add kiya */}
         <button onClick={() => setActiveTab('history')} className={navBtnClass('history')}>History & Backup</button>
+        <button onClick={() => setActiveTab('admin')} className={navBtnClass('admin')}>Admin</button>
       </nav>
 
       <div className="p-4">
@@ -127,8 +129,8 @@ function App() {
         {activeTab === 'list' && <PatientList onSelectPatient={handleSelectPatient} />}
         {activeTab === 'report' && selectedPatient && <ResultEntry patient={selectedPatient} onBack={() => setActiveTab('list')} />}
         {activeTab === 'settings' && <TestMaster />}
-        {/* 3. Naya Tab Render Logic */}
         {activeTab === 'history' && <PatientHistoryAndRestore />}
+        {activeTab === 'admin' && <Admin />}
       </div>
     </div>
   );

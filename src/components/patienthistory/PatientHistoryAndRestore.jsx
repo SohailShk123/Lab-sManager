@@ -42,15 +42,32 @@ export default function PatientHistoryAndRestore() {
   };
 
   // ☁️ 2. Cloud Restore
-  const handleRestore = async () => {
+  // const handleRestore = async () => {
+  //   if(!window.confirm("⚠️ This will download cloud data. Proceed?")) return;
+  //   setRestoreLoading(true);
+  //   setRestoreMsg("Downloading data...");
+  //   const response = await window.api.restoreFromCloud();
+  //   setRestoreMsg(response.success ? `✅ ${response.message}` : `❌ Error: ${response.message}`);
+  //   setRestoreLoading(false);
+  // };
+
+const handleRestore = async () => {
     if(!window.confirm("⚠️ This will download cloud data. Proceed?")) return;
     setRestoreLoading(true);
     setRestoreMsg("Downloading data...");
+    
     const response = await window.api.restoreFromCloud();
+    
     setRestoreMsg(response.success ? `✅ ${response.message}` : `❌ Error: ${response.message}`);
     setRestoreLoading(false);
-  };
 
+    // 👇 Yahan yeh chhota sa code add kar do:
+    if (response.success) {
+      setTimeout(() => {
+        window.location.reload(); // Restoring ke baad page automatically refresh ho jayega aur data dikhne lagega!
+      }, 1500); // 1.5 seconds ka delay taaki success message dikh sake
+    }
+  };
   // 📥 3. CSV Import Logic (Aapka Master Idea!)
 // 📥 3. CSV Import Logic (With Date Format Fix)
   const handleFileUpload = (e) => {

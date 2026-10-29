@@ -39,6 +39,13 @@ db.serialize(() => {
       FOREIGN KEY (patient_id) REFERENCES patients(id)
     )
   `);
+// 👇 MIGRATION: Table banne ke turant baad baaki columns ensure kar lo (db.serialize ke andar)
+  db.run("ALTER TABLE bookings ADD COLUMN results TEXT", (err) => {});
+  db.run("ALTER TABLE bookings ADD COLUMN totalAmount REAL", (err) => {});
+  db.run("ALTER TABLE bookings ADD COLUMN total_amount REAL", (err) => {}); 
+  db.run("ALTER TABLE bookings ADD COLUMN discount REAL", (err) => {});
+  db.run("ALTER TABLE bookings ADD COLUMN paidAmount REAL", (err) => {});
+  db.run("ALTER TABLE bookings ADD COLUMN balance REAL", (err) => {});
   // 3. TESTS TABLE
   db.run(`
     CREATE TABLE IF NOT EXISTS tests (
@@ -199,6 +206,7 @@ db.serialize(() => {
     }
   });
 });
+
 
 // Module ko export karna zaroori hai taaki main.js isko use kar sake
 module.exports = db;

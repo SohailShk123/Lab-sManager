@@ -20,7 +20,11 @@ const apiBridge = {
   verifyLabId: (labId) => ipcRenderer.invoke("verify-and-save-lab-id", labId),
   getPatientHistory: (data) => ipcRenderer.invoke("get-patient-history", data),
   restoreFromCloud: () => ipcRenderer.invoke("restore-from-cloud"),
-  importOldData: (rows) => ipcRenderer.invoke("import-old-data", rows)
+  importOldData: (rows) => ipcRenderer.invoke("import-old-data", rows),
+  getConfig: () => ipcRenderer.invoke('getConfig'),
+  saveConfig: (data) => ipcRenderer.invoke('saveConfig', data),
+  checkCloudBackupSize: () => ipcRenderer.invoke("check-cloud-backup-size"),
+  restoreFromCloud: (limit) => ipcRenderer.invoke("restore-from-cloud", limit),
 };
 
 // Dono names se expose karein
